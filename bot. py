@@ -20,11 +20,14 @@ from enum import Enum
 # НАСТРОЙКИ
 # ============================================
 
-BOT_TOKEN = "8582908092:AAFJsjGQUvozKAqvklC3470q4ZQNuUHR9M8"
+BOT_TOKEN = "8813927024:AAFUgV_RQKB9btoH1NFT5WfB3NOeJt6KnIc"
 
-ADMIN_IDS = [5356400377]
+ADMIN_IDS = [7581133015]
 
-
+REQUIRED_CHANNELS = [
+    {"name": "🆕 Канал", "url": "https://t.me/akimchik_news", "id": "@akimchik_news"},
+    {"name": "💬 Чат", "url": "https://t.me/chat_claim", "id": "@chat_claim"}
+]
 
 MARKET_NAME = "🍕 GMP Shop"
 
@@ -38,14 +41,14 @@ RATES = {
     5000: 1.1,
 }
 
-MIN_AMOUNT = 10
+MIN_AMOUNT = 1000
 MAX_AMOUNT = 100000
 PAYMENT_TIMEOUT = 900
 CACHE_TTL = 300
 
 API_ID = 26694251
 API_HASH = '5b041e7b70b74c095435be2b74c02abf'
-SESSION_NAME = "hjklgf1"
+SESSION_NAME = "userbot_session"
 GMP_BOT_USERNAME = "gminesbot"
 
 # ============================================
@@ -609,6 +612,37 @@ def check_payment_status(payment_id: str) -> Dict[str, Any]:
 # ПРОВЕРКА ПОДПИСКИ
 # ============================================
 
+def check_subscriptions(user_id: int, force_check: bool = False) -> bool:
+    cache_key = f"subscription_{user_id}"
+    if not force_check:
+        cached = storage._get_cached(cache_key, ttl=CACHE_TTL)
+        if cached is not None:
+            return cached
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = bot.get_chat_member(channel["id"], user_id)
+            if member.status in ["left", "kicked"]:
+                storage._set_cache(cache_key, False)
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка проверки: {e}")
+            storage._set_cache(cache_key, False)
+            return False
+    storage._set_cache(cache_key, True)
+    return True
+
+def get_subscription_keyboard() -> types.InlineKeyboardMarkup:
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    for channel in REQUIRED_CHANNELS:
+        keyboard.add(types.InlineKeyboardButton(
+            text=channel["name"],
+            url=channel["url"]
+        ))
+    keyboard.add(types.InlineKeyboardButton(
+        text="✅ Проверить подписку",
+        callback_data="check_subscription"
+    ))
+    return keyboard
 
 # ============================================
 # ВАЛИДАЦИЯ
@@ -1211,4 +1245,3 @@ if __name__ == "__main__":
     finally:
         userbot_manager.stop()
         logger.info("Завершено")
- 
