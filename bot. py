@@ -22,7 +22,7 @@ from enum import Enum
 
 BOT_TOKEN = "8582908092:AAFJsjGQUvozKAqvklC3470q4ZQNuUHR9M8"
 
-ADMIN_IDS = 5356400377
+ADMIN_IDS = [5356400377]
 
 REQUIRED_CHANNELS = [
     {"name": "🆕 Канал", "url": "https://t.me/gmp_owner", "id": "@gmp_owner"},
