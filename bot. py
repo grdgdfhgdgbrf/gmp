@@ -20,11 +20,14 @@ from enum import Enum
 # НАСТРОЙКИ
 # ============================================
 
-BOT_TOKEN = "8582908092:AAFJsjGQUvozKAqvklC3470q4ZQNuUHR9M8"
+BOT_TOKEN = "8813927024:AAFUgV_RQKB9btoH1NFT5WfB3NOeJt6KnIc"
 
-ADMIN_IDS = [5356400377]
+ADMIN_IDS = [7581133015]
 
-
+REQUIRED_CHANNELS = [
+    {"name": "🆕 Канал", "url": "https://t.me/akimchik_news", "id": "@akimchik_news"},
+    {"name": "💬 Чат", "url": "https://t.me/chat_claim", "id": "@chat_claim"}
+]
 
 MARKET_NAME = "🍕 GMP Shop"
 
@@ -38,21 +41,15 @@ RATES = {
     5000: 1.1,
 }
 
-MIN_AMOUNT = 10
+MIN_AMOUNT = 1000
 MAX_AMOUNT = 100000
 PAYMENT_TIMEOUT = 900
 CACHE_TTL = 300
 
 API_ID = 26694251
 API_HASH = '5b041e7b70b74c095435be2b74c02abf'
-SESSION_NAME = "userbot_session"
+SESSION_NAME = "hjklgf1"  # Имя сессии для userbot
 GMP_BOT_USERNAME = "gminesbot"
-
-# Каналы для подписки
-REQUIRED_CHANNELS = [
-    {"username": "gmp_shop_channel", "name": "GMP Shop Channel"},
-    {"username": "gmp_news", "name": "GMP News"},
-]
 
 # ============================================
 # ЛОГИРОВАНИЕ
@@ -122,11 +119,13 @@ class Storage:
         if "rates" not in self.data:
             self.data["rates"] = RATES.copy()
             self.save_data()
-        if "userbot_status" not in self.data:
-            self.data["userbot_status"] = {
-                "phone": "",
+        if "userbot" not in self.data:
+            self.data["userbot"] = {
+                "phone": "79200089184",
+                "username": "hjklgf1",
                 "is_active": False,
-                "last_check": None
+                "last_check": None,
+                "session_exists": False
             }
             self.save_data()
     
@@ -146,7 +145,7 @@ class Storage:
                         return json.load(f)
                 except:
                     pass
-        return {"rates": RATES.copy(), "userbot_status": {"phone": "", "is_active": False, "last_check": None}}
+        return {"rates": RATES.copy(), "userbot": {"phone": "79200089184", "username": "hjklgf1", "is_active": False, "last_check": None, "session_exists": False}}
     
     def save_data(self):
         with self.lock:
@@ -292,7 +291,7 @@ class Storage:
     def get_all_users(self) -> list:
         users = []
         for key, value in self.data.items():
-            if key not in ["rates", "userbot_status"] and isinstance(value, dict):
+            if key not in ["rates", "userbot"] and isinstance(value, dict):
                 try:
                     users.append(int(key))
                 except:
@@ -306,99 +305,33 @@ class Storage:
     def get_total_revenue(self) -> float:
         total = 0
         for key, value in self.data.items():
-            if key not in ["rates", "userbot_status"] and isinstance(value, dict):
+            if key not in ["rates", "userbot"] and isinstance(value, dict):
                 for purchase in value.get("purchases", []):
                     if purchase.get("status") == "completed":
                         total += purchase.get("amount_rub", 0)
         return total
     
-    def set_userbot_status(self, phone: str, is_active: bool):
-        self.data["userbot_status"] = {
-            "phone": phone,
-            "is_active": is_active,
-            "last_check": datetime.now().isoformat()
-        }
+    def get_userbot_data(self) -> Dict:
+        return self.data.get("userbot", {"phone": "79200089184", "username": "hjklgf1", "is_active": False, "last_check": None, "session_exists": False})
+    
+    def set_userbot_active(self, is_active: bool):
+        self.data["userbot"]["is_active"] = is_active
+        self.data["userbot"]["last_check"] = datetime.now().isoformat()
+        session_file = SESSION_NAME + ".session"
+        self.data["userbot"]["session_exists"] = os.path.exists(session_file)
         self.save_data()
     
-    def get_userbot_status(self) -> Dict:
-        return self.data.get("userbot_status", {"phone": "", "is_active": False, "last_check": None})
+    def set_userbot_phone(self, phone: str):
+        self.data["userbot"]["phone"] = phone
+        self.save_data()
 
 storage = Storage()
-
-# ============================================
-# ПРОВЕРКА ПОДПИСКИ
-# ============================================
-
-def check_subscriptions(user_id: int, force_check: bool = False) -> bool:
-    """Проверяет подписку пользователя на каналы"""
-    if not force_check:
-        user = storage.get_user(user_id)
-        if user.subscription_checked:
-            return True
-    
-    try:
-        if not userbot_manager.is_ready:
-            logger.warning("Userbot не готов для проверки подписки")
-            return True
-        
-        future = asyncio.run_coroutine_threadsafe(
-            _check_subscriptions_async(user_id),
-            userbot_manager.loop
-        )
-        result = future.result(timeout=30)
-        return result
-    except Exception as e:
-        logger.error(f"Ошибка проверки подписки: {e}")
-        return True
-
-async def _check_subscriptions_async(user_id: int) -> bool:
-    """Асинхронная проверка подписки через Telethon"""
-    try:
-        for channel in REQUIRED_CHANNELS:
-            username = channel["username"]
-            try:
-                entity = await userbot_manager.client.get_entity(username)
-                participant = await userbot_manager.client.get_participant(entity, user_id)
-                if not participant:
-                    logger.info(f"Пользователь {user_id} не подписан на {username}")
-                    return False
-            except Exception as e:
-                logger.error(f"Ошибка проверки канала {username}: {e}")
-                return False
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка проверки подписок: {e}")
-        return False
-
-def get_subscription_keyboard() -> types.InlineKeyboardMarkup:
-    keyboard = types.InlineKeyboardMarkup(row_width=1)
-    for channel in REQUIRED_CHANNELS:
-        keyboard.add(
-            types.InlineKeyboardButton(
-                f"📢 {channel['name']}",
-                url=f"https://t.me/{channel['username']}"
-            )
-        )
-    keyboard.add(
-        types.InlineKeyboardButton("✅ Проверить подписку", callback_data="check_subscription")
-    )
-    return keyboard
 
 # ============================================
 # USERBOT
 # ============================================
 
 class UserbotManager:
-    """
-    Менеджер Userbot для взаимодействия с Telegram API через Telethon.
-    
-    Основные функции:
-    1. Автоматический вход в аккаунт Telegram с поддержкой 2FA
-    2. Обработка команд в боте @gminesbot
-    3. Проверка подписок пользователей
-    4. Отправка и подтверждение переводов GMP
-    """
-    
     def __init__(self):
         self.client = None
         self.running = False
@@ -410,34 +343,30 @@ class UserbotManager:
         self.max_reconnect_attempts = 5
         self.start_event = threading.Event()
         self.auth_data = {
-            "phone": "",
-            "password": "",
+            "phone": "79200089184",
             "code": "",
+            "password": "",
             "awaiting_code": False,
             "awaiting_password": False
         }
     
-    def start(self, phone: str = None, password: str = None) -> bool:
-        """Запускает userbot с опциональными данными для входа"""
+    def start(self, phone: Optional[str] = None) -> bool:
         with self.lock:
             if self.running:
                 return True
             try:
                 logger.info("Запуск Userbot...")
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
                 
                 # Используем сохраненный телефон или переданный
                 if phone:
                     self.auth_data["phone"] = phone
                 else:
-                    status = storage.get_userbot_status()
-                    if status.get("phone"):
-                        self.auth_data["phone"] = status["phone"]
+                    userbot_data = storage.get_userbot_data()
+                    if userbot_data.get("phone"):
+                        self.auth_data["phone"] = userbot_data["phone"]
                 
-                if password:
-                    self.auth_data["password"] = password
-                
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
                 self.client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
                 
                 def run_userbot():
@@ -448,6 +377,7 @@ class UserbotManager:
                         logger.error(f"Ошибка userbot: {e}")
                         self.running = False
                         self.is_ready = False
+                        storage.set_userbot_active(False)
                         self.start_event.set()
                 
                 self.thread = threading.Thread(target=run_userbot, daemon=True)
@@ -458,31 +388,33 @@ class UserbotManager:
                     time.sleep(1)
                     if self.is_ready:
                         logger.info("Userbot готов")
+                        storage.set_userbot_active(True)
                         self.start_event.set()
-                        storage.set_userbot_status(self.auth_data["phone"], True)
                         return True
                 
                 logger.warning("Userbot не готов (таймаут)")
+                storage.set_userbot_active(False)
                 self.start_event.set()
                 return False
             except Exception as e:
                 logger.error(f"Ошибка инициализации: {e}")
                 self.running = False
                 self.is_ready = False
+                storage.set_userbot_active(False)
                 self.start_event.set()
                 return False
     
     async def _start_async(self):
-        """Асинхронная инициализация и основной цикл userbot"""
         try:
             # Пробуем войти с сохраненной сессией
             await self.client.start()
             me = await self.client.get_me()
             logger.info(f"Userbot запущен: @{me.username} (ID: {me.id})")
+            logger.info(f"Телефон: {self.auth_data['phone']}")
             self.running = True
             self.is_ready = True
             self.reconnect_attempts = 0
-            storage.set_userbot_status(self.auth_data["phone"], True)
+            storage.set_userbot_active(True)
             
             # Основной цикл поддержания соединения
             while self.running:
@@ -499,16 +431,15 @@ class UserbotManager:
             logger.error(f"Критическая ошибка: {e}")
             self.running = False
             self.is_ready = False
-            storage.set_userbot_status(self.auth_data["phone"], False)
+            storage.set_userbot_active(False)
     
     async def _reconnect(self):
-        """Переподключение при потере соединения"""
         self.reconnect_attempts += 1
         if self.reconnect_attempts > self.max_reconnect_attempts:
             logger.error("Превышено количество попыток переподключения")
             self.running = False
             self.is_ready = False
-            storage.set_userbot_status(self.auth_data["phone"], False)
+            storage.set_userbot_active(False)
             return
         
         try:
@@ -519,16 +450,15 @@ class UserbotManager:
             logger.info("Переподключено успешно")
             self.is_ready = True
             self.reconnect_attempts = 0
-            storage.set_userbot_status(self.auth_data["phone"], True)
+            storage.set_userbot_active(True)
         except Exception as e:
             logger.error(f"Ошибка переподключения: {e}")
     
     def stop(self):
-        """Останавливает userbot"""
         with self.lock:
             self.running = False
             self.is_ready = False
-            storage.set_userbot_status(self.auth_data.get("phone", ""), False)
+            storage.set_userbot_active(False)
             if self.client:
                 try:
                     future = asyncio.run_coroutine_threadsafe(
@@ -548,12 +478,8 @@ class UserbotManager:
     def process_withdrawal(self, user_id: int, amount: float, 
                           username: Optional[str]) -> Tuple[bool, str]:
         if not self.is_ready or not self.client:
-            status = storage.get_userbot_status()
-            if not status.get("is_active"):
-                return False, "Userbot не активен. Обратитесь к администратору."
             if not self.start():
                 return False, "Userbot не готов. Попробуйте позже."
-        
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self._send_withdrawal_command(user_id, amount, username),
@@ -628,14 +554,13 @@ class UserbotManager:
                                             except:
                                                 pass
                         
-                        text_lower = text
-                        if any(word in text_lower for word in ["перевел", "переведено", "успешно", "выполнено", "зачислено"]):
+                        if any(word in text for word in ["перевел", "переведено", "успешно", "выполнено", "зачислено"]):
                             return True, "Перевод успешно выполнен"
                         
-                        if any(word in text_lower for word in ["недостаточно", "ошибка", "отказано", "нет средств", "неверно"]):
+                        if any(word in text for word in ["недостаточно", "ошибка", "отказано", "нет средств", "неверно"]):
                             return False, f"Ошибка: {msg.text}"
                         
-                        if any(word in text_lower for word in ["заявка", "принята", "обрабатывается", "отправлена"]):
+                        if any(word in text for word in ["заявка", "принята", "обрабатывается", "отправлена"]):
                             return True, "Заявка на перевод принята"
                     
                     await asyncio.sleep(2)
@@ -689,17 +614,6 @@ class UserbotManager:
         except Exception as e:
             logger.error(f"Ошибка получения баланса: {e}")
             return False, 0
-    
-    def check_status(self) -> Dict[str, Any]:
-        """Проверяет статус userbot"""
-        status = storage.get_userbot_status()
-        return {
-            "is_active": status.get("is_active", False),
-            "phone": status.get("phone", ""),
-            "last_check": status.get("last_check"),
-            "is_ready": self.is_ready,
-            "running": self.running
-        }
 
 userbot_manager = UserbotManager()
 
@@ -809,6 +723,42 @@ def check_payment_status(payment_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 # ============================================
+# ПРОВЕРКА ПОДПИСКИ
+# ============================================
+
+def check_subscriptions(user_id: int, force_check: bool = False) -> bool:
+    cache_key = f"subscription_{user_id}"
+    if not force_check:
+        cached = storage._get_cached(cache_key, ttl=CACHE_TTL)
+        if cached is not None:
+            return cached
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = bot.get_chat_member(channel["id"], user_id)
+            if member.status in ["left", "kicked"]:
+                storage._set_cache(cache_key, False)
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка проверки: {e}")
+            storage._set_cache(cache_key, False)
+            return False
+    storage._set_cache(cache_key, True)
+    return True
+
+def get_subscription_keyboard() -> types.InlineKeyboardMarkup:
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    for channel in REQUIRED_CHANNELS:
+        keyboard.add(types.InlineKeyboardButton(
+            text=channel["name"],
+            url=channel["url"]
+        ))
+    keyboard.add(types.InlineKeyboardButton(
+        text="✅ Проверить подписку",
+        callback_data="check_subscription"
+    ))
+    return keyboard
+
+# ============================================
 # ВАЛИДАЦИЯ
 # ============================================
 
@@ -872,7 +822,7 @@ def subscription_required(func):
         if not check_subscriptions(user_id):
             bot.send_message(
                 user_id,
-                "🔒 Для доступа к боту подпишитесь на наши каналы:",
+                "🔒 Для продолжения подпишись на каналы:",
                 reply_markup=get_subscription_keyboard()
             )
             return
@@ -908,35 +858,16 @@ def log_error(func):
 @log_error
 def cmd_start(message):
     user_id = message.from_user.id
-    user = storage.get_user(user_id)
-    
+    storage.get_user(user_id)
     if not check_subscriptions(user_id):
         bot.send_message(
             user_id,
-            "👋 Добро пожаловать в GMP Shop!\n\n"
-            "🔒 Для доступа к боту подпишитесь на наши каналы:",
+            "🔒 Подпишись на каналы:",
             reply_markup=get_subscription_keyboard()
         )
         return
-    
     storage.set_subscription_checked(user_id)
-    
-    rates = storage.get_rates()
-    text = (
-        f"{MARKET_NAME}\n\n"
-        "👋 Добро пожаловать!\n\n"
-        "💰 Текущие курсы:\n"
-    )
-    for threshold, rate in sorted(rates.items()):
-        text += f"• от {threshold} GMP = {rate} RUB\n"
-    text += f"\n💳 Минимальная покупка: {MIN_AMOUNT} GMP"
-    text += f"\n📈 Максимальная покупка: {MAX_AMOUNT} GMP"
-    
-    bot.send_message(
-        user_id,
-        text,
-        reply_markup=get_main_keyboard()
-    )
+    show_main_menu(message)
 
 @bot.message_handler(commands=['admin'])
 @admin_required
@@ -959,27 +890,11 @@ def process_check_subscription(call):
         except:
             pass
         bot.answer_callback_query(call.id, "✅ Подписка подтверждена!")
-        
-        rates = storage.get_rates()
-        text = (
-            f"{MARKET_NAME}\n\n"
-            "👋 Добро пожаловать!\n\n"
-            "💰 Текущие курсы:\n"
-        )
-        for threshold, rate in sorted(rates.items()):
-            text += f"• от {threshold} GMP = {rate} RUB\n"
-        text += f"\n💳 Минимальная покупка: {MIN_AMOUNT} GMP"
-        text += f"\n📈 Максимальная покупка: {MAX_AMOUNT} GMP"
-        
-        bot.send_message(
-            user_id,
-            text,
-            reply_markup=get_main_keyboard()
-        )
+        show_main_menu(call.message)
     else:
         bot.answer_callback_query(
             call.id,
-            "❌ Вы не подписаны на все каналы. Пожалуйста, подпишитесь и попробуйте снова.",
+            "❌ Подпишись на все каналы",
             show_alert=True
         )
 
@@ -1117,7 +1032,7 @@ def check_payment(call):
             show_main_menu(call.message)
             return
         storage.update_purchase_status(user_id, payment_id, PaymentStatus.PAID)
-        bot.send_message(user_id, "🔄 Отправка запроса на вывод...")
+        bot.send_message(user_id, "🔄 Отправка запроса...")
         username = call.from_user.username
         success, message = userbot_manager.process_withdrawal(
             user_id, purchase.amount_gmp, username
@@ -1126,33 +1041,30 @@ def check_payment(call):
             storage.update_purchase_status(user_id, payment_id, PaymentStatus.COMPLETED)
             bot.send_message(
                 user_id,
-                f"✅ Перевод выполнен!\n\n"
+                f"✅ Готово!\n\n"
                 f"💰 GMP: {purchase.amount_gmp}\n"
                 f"📊 Курс: {purchase.rate_used} RUB\n"
                 f"💵 Оплачено: {purchase.amount_rub} RUB\n"
-                f"🎉 Спасибо за покупку!"
+                f"🎉 Спасибо!"
             )
         else:
             storage.update_purchase_status(user_id, payment_id, PaymentStatus.FAILED, message)
             bot.send_message(
                 user_id,
-                f"❌ Ошибка вывода: {message}\n"
-                f"ID платежа: {payment_id[:8]}\n\n"
-                "🔄 Попробуйте нажать 'Проверить оплату' еще раз."
+                f"❌ Ошибка: {message}\nID: {payment_id[:8]}"
             )
         show_main_menu(call.message)
     else:
         if result.get("status") == "expired":
             storage.update_purchase_status(user_id, payment_id, PaymentStatus.EXPIRED)
-            bot.send_message(user_id, "⏰ Время оплаты истекло")
+            bot.send_message(user_id, "⏰ Время истекло")
             show_main_menu(call.message)
             return
         bot.send_message(
             user_id,
-            f"⏳ Платеж еще не оплачен\n"
+            f"⏳ Платеж не оплачен\n"
             f"Сумма: {purchase.amount_rub} RUB\n"
-            f"Статус: {result.get('raw_status', 'ожидание')}\n\n"
-            "💡 После оплаты нажмите 'Проверить оплату' еще раз."
+            f"Статус: {result.get('raw_status', 'ожидание')}"
         )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("cancel_payment_"))
@@ -1165,7 +1077,7 @@ def cancel_payment(call):
         bot.delete_message(user_id, call.message.message_id)
     except:
         pass
-    bot.send_message(user_id, "❌ Платеж отменен")
+    bot.send_message(user_id, "❌ Отменено")
     show_main_menu(call.message)
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_all_payments")
@@ -1179,7 +1091,7 @@ def cancel_all_payments(call):
         bot.delete_message(user_id, call.message.message_id)
     except:
         pass
-    bot.send_message(user_id, f"❌ Отменено {len(pending)} платежей")
+    bot.send_message(user_id, f"❌ Отменено {len(pending)}")
     show_main_menu(call.message)
 
 # ============================================
@@ -1193,10 +1105,10 @@ def cmd_history(message):
     user_id = message.from_user.id
     user = storage.get_user(user_id)
     if not user.purchases:
-        bot.send_message(user_id, "📜 История покупок пуста")
+        bot.send_message(user_id, "📜 Покупок нет")
         return
     purchases = user.purchases[-10:][::-1]
-    text = "📜 История покупок (последние 10):\n\n"
+    text = "📜 История (последние 10):\n\n"
     for i, p in enumerate(purchases, 1):
         emoji = {
             "pending": "⏳",
@@ -1226,23 +1138,19 @@ def cmd_help(message):
     user_id = message.from_user.id
     rates = storage.get_rates()
     text = "ℹ️ Помощь\n\n"
-    text += "Как купить GMP:\n"
-    text += "1️⃣ Нажми '🍕 Купить GMP'\n"
-    text += "2️⃣ Введи количество GMP (от 10)\n"
-    text += "3️⃣ Оплати через платежную систему\n"
-    text += "4️⃣ Нажми '✅ Проверить оплату'\n"
-    text += "5️⃣ Получи GMP на аккаунт\n\n"
-    text += "📌 Текущие курсы:\n"
+    text += "Как купить:\n"
+    text += "1️⃣ Нажми 'Купить GMP'\n"
+    text += "2️⃣ Введи количество\n"
+    text += "3️⃣ Оплати\n"
+    text += "4️⃣ Нажми 'Проверить оплату'\n\n"
+    text += "📌 Курсы:\n"
     for threshold, rate in sorted(rates.items()):
         text += f"• от {threshold} GMP = {rate} RUB\n"
-    text += f"\n💰 Минимальная покупка: {MIN_AMOUNT} GMP"
-    text += f"\n📈 Максимальная покупка: {MAX_AMOUNT} GMP"
-    text += f"\n\n⏳ Срок оплаты: 15 минут"
-    text += f"\n❓ Вопросы: @gmp_shop_support"
+    text += f"\n💰 От {MIN_AMOUNT} до {MAX_AMOUNT} GMP"
     bot.send_message(user_id, text, reply_markup=get_main_keyboard())
 
 # ============================================
-# УПРАВЛЕНИЕ USERBOT
+# УПРАВЛЕНИЕ USERBOT (АДМИНКА)
 # ============================================
 
 @bot.message_handler(func=lambda message: message.text == "🤖 Управление Userbot")
@@ -1250,131 +1158,37 @@ def cmd_help(message):
 @log_error
 def admin_userbot(message):
     user_id = message.from_user.id
-    status = userbot_manager.check_status()
+    userbot_data = storage.get_userbot_data()
+    
+    status = "✅ Активен" if userbot_data.get("is_active") else "❌ Неактивен"
+    ready = "✅ Да" if userbot_manager.is_ready else "❌ Нет"
+    running = "✅ Да" if userbot_manager.running else "❌ Нет"
+    session_exists = "✅ Да" if userbot_data.get("session_exists") else "❌ Нет"
     
     text = "🤖 Управление Userbot\n\n"
-    text += f"📱 Телефон: {status['phone'] if status['phone'] else 'Не указан'}\n"
-    text += f"🟢 Статус: {'Активен' if status['is_active'] else 'Неактивен'}\n"
-    text += f"🔗 Подключен: {'Да' if status['is_ready'] else 'Нет'}\n"
-    text += f"🔄 Запущен: {'Да' if status['running'] else 'Нет'}\n"
-    if status.get('last_check'):
-        text += f"📅 Последняя проверка: {status['last_check'][:16]}\n"
+    text += f"📱 Телефон: {userbot_data.get('phone', 'Не указан')}\n"
+    text += f"👤 Username: @{userbot_data.get('username', 'Не указан')}\n"
+    text += f"🟢 Статус: {status}\n"
+    text += f"🔗 Подключен: {ready}\n"
+    text += f"🔄 Запущен: {running}\n"
+    text += f"💾 Файл сессии: {session_exists}\n"
+    if userbot_data.get('last_check'):
+        text += f"📅 Последняя проверка: {userbot_data['last_check'][:16]}\n"
     
-    if status['is_active'] and status['is_ready']:
+    if userbot_manager.is_ready and userbot_manager.running:
         success, balance = userbot_manager.get_balance()
         if success:
-            text += f"\n💰 Баланс: {balance:.2f} GMP"
+            text += f"\n💰 Баланс GMP: {balance:.2f}"
     
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        types.InlineKeyboardButton("📱 Ввести телефон", callback_data="userbot_phone"),
-        types.InlineKeyboardButton("🔑 Ввести код", callback_data="userbot_code"),
-        types.InlineKeyboardButton("🔐 Ввести пароль (2FA)", callback_data="userbot_password"),
         types.InlineKeyboardButton("▶️ Запустить", callback_data="userbot_start"),
         types.InlineKeyboardButton("⏹ Остановить", callback_data="userbot_stop"),
         types.InlineKeyboardButton("🔄 Проверить статус", callback_data="userbot_status"),
+        types.InlineKeyboardButton("📱 Ввести код", callback_data="userbot_code"),
         types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
     )
     bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_phone")
-@admin_required
-@log_error
-def userbot_phone(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(
-        user_id,
-        "📱 Введите номер телефона в формате:\n"
-        "➕ Код страны + номер\n"
-        "Пример: +79123456789"
-    )
-    bot.register_next_step_handler(msg, process_userbot_phone)
-
-def process_userbot_phone(message):
-    user_id = message.from_user.id
-    phone = message.text.strip()
-    
-    # Простая валидация
-    if not phone.startswith('+') or len(phone) < 10:
-        bot.send_message(user_id, "❌ Неверный формат. Используйте +79123456789")
-        admin_userbot(message)
-        return
-    
-    userbot_manager.auth_data["phone"] = phone
-    storage.set_userbot_status(phone, False)
-    bot.send_message(user_id, f"✅ Телефон сохранен: {phone}\nТеперь введите код подтверждения.")
-    admin_userbot(message)
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_code")
-@admin_required
-@log_error
-def userbot_code(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    status = storage.get_userbot_status()
-    phone = status.get("phone", "")
-    
-    if not phone:
-        bot.send_message(user_id, "❌ Сначала введите номер телефона")
-        admin_userbot(call.message)
-        return
-    
-    msg = bot.send_message(
-        user_id,
-        f"🔑 Введите код подтверждения из Telegram для {phone}:\n"
-        "Код придет в Telegram на ваш аккаунт"
-    )
-    bot.register_next_step_handler(msg, process_userbot_code)
-
-def process_userbot_code(message):
-    user_id = message.from_user.id
-    code = message.text.strip()
-    
-    if not code.isdigit() or len(code) != 5:
-        bot.send_message(user_id, "❌ Код должен состоять из 5 цифр")
-        admin_userbot(message)
-        return
-    
-    userbot_manager.auth_data["code"] = code
-    
-    # Пытаемся запустить userbot с кодом
-    status = storage.get_userbot_status()
-    phone = status.get("phone", "")
-    
-    if not phone:
-        bot.send_message(user_id, "❌ Телефон не найден. Введите его сначала.")
-        admin_userbot(message)
-        return
-    
-    # Запускаем userbot с телефоном и кодом
-    if userbot_manager.start(phone):
-        bot.send_message(user_id, "✅ Userbot успешно запущен!")
-    else:
-        bot.send_message(user_id, "❌ Не удалось запустить userbot. Проверьте код и попробуйте снова.")
-    
-    admin_userbot(message)
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_password")
-@admin_required
-@log_error
-def userbot_password(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(
-        user_id,
-        "🔐 Введите пароль двухфакторной аутентификации (2FA):\n"
-        "Если 2FA не включена, оставьте поле пустым"
-    )
-    bot.register_next_step_handler(msg, process_userbot_password)
-
-def process_userbot_password(message):
-    user_id = message.from_user.id
-    password = message.text.strip()
-    
-    userbot_manager.auth_data["password"] = password if password else ""
-    bot.send_message(user_id, "✅ Пароль сохранен")
-    admin_userbot(message)
 
 @bot.callback_query_handler(func=lambda call: call.data == "userbot_start")
 @admin_required
@@ -1383,13 +1197,8 @@ def userbot_start(call):
     user_id = call.from_user.id
     bot.answer_callback_query(call.id, "🔄 Запуск...")
     
-    status = storage.get_userbot_status()
-    phone = status.get("phone", "")
-    
-    if not phone:
-        bot.send_message(user_id, "❌ Сначала введите номер телефона")
-        admin_userbot(call.message)
-        return
+    userbot_data = storage.get_userbot_data()
+    phone = userbot_data.get("phone", "79200089184")
     
     # Если userbot уже запущен, перезапускаем
     if userbot_manager.running:
@@ -1399,7 +1208,7 @@ def userbot_start(call):
     if userbot_manager.start(phone):
         bot.send_message(user_id, "✅ Userbot успешно запущен!")
     else:
-        bot.send_message(user_id, "❌ Не удалось запустить userbot. Проверьте настройки.")
+        bot.send_message(user_id, "❌ Не удалось запустить userbot. Возможно нужен код подтверждения.\nНажмите '📱 Ввести код'")
     
     admin_userbot(call.message)
 
@@ -1411,7 +1220,7 @@ def userbot_stop(call):
     bot.answer_callback_query(call.id)
     
     userbot_manager.stop()
-    storage.set_userbot_status(storage.get_userbot_status().get("phone", ""), False)
+    storage.set_userbot_active(False)
     bot.send_message(user_id, "⏹ Userbot остановлен")
     admin_userbot(call.message)
 
@@ -1421,7 +1230,63 @@ def userbot_stop(call):
 def userbot_status(call):
     user_id = call.from_user.id
     bot.answer_callback_query(call.id)
+    
+    # Проверяем наличие файла сессии
+    session_file = SESSION_NAME + ".session"
+    session_exists = os.path.exists(session_file)
+    userbot_data = storage.get_userbot_data()
+    userbot_data["session_exists"] = session_exists
+    storage.save_data()
+    
+    if session_exists:
+        bot.send_message(user_id, "✅ Файл сессии найден. Попробуйте запустить userbot.")
+    else:
+        bot.send_message(user_id, "❌ Файл сессии не найден. Нужно ввести код подтверждения.")
+    
     admin_userbot(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_code")
+@admin_required
+@log_error
+def userbot_code(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    
+    msg = bot.send_message(
+        user_id,
+        "📱 Введите код подтверждения из Telegram для аккаунта @hjklgf1 (79200089184):\n\n"
+        "Код придет в Telegram на ваш аккаунт\n"
+        "Пример: 12345"
+    )
+    bot.register_next_step_handler(msg, process_userbot_code)
+
+def process_userbot_code(message):
+    user_id = message.from_user.id
+    code = message.text.strip()
+    
+    if not code.isdigit() or len(code) != 5:
+        bot.send_message(user_id, "❌ Код должен состоять из 5 цифр. Попробуйте снова.")
+        admin_userbot(message)
+        return
+    
+    bot.send_message(user_id, f"✅ Код {code} получен. Попробуйте запустить userbot снова.")
+    
+    # Сохраняем код и пытаемся запустить
+    phone = storage.get_userbot_data().get("phone", "79200089184")
+    userbot_manager.auth_data["code"] = code
+    
+    # Останавливаем если запущен
+    if userbot_manager.running:
+        userbot_manager.stop()
+        time.sleep(2)
+    
+    # Запускаем с кодом
+    if userbot_manager.start(phone):
+        bot.send_message(user_id, "✅ Userbot успешно запущен с кодом подтверждения!")
+    else:
+        bot.send_message(user_id, "❌ Не удалось запустить userbot. Проверьте код и попробуйте снова.")
+    
+    admin_userbot(message)
 
 # ============================================
 # АДМИНКА - КУРСЫ
@@ -1434,7 +1299,7 @@ def admin_rates(message):
     user_id = message.from_user.id
     rates = storage.get_rates()
     text = "💲 Управление курсами:\n\n"
-    text += "Текущие курсы:\n"
+    text += "Текущие:\n"
     for threshold, rate in sorted(rates.items()):
         text += f"• от {threshold} GMP = {rate} RUB\n"
     keyboard = types.InlineKeyboardMarkup(row_width=2)
@@ -1454,12 +1319,7 @@ def admin_add_rate(call):
     bot.answer_callback_query(call.id)
     msg = bot.send_message(
         user_id,
-        "➕ Добавление курса\n\n"
-        "Формат: ПОРОГ:ЦЕНА\n"
-        "Пример: 1000:1.5\n\n"
-        "Где:\n"
-        "• ПОРОГ - количество GMP\n"
-        "• ЦЕНА - цена за 1 GMP в RUB"
+        "Формат: ПОРОГ:ЦЕНА\nПример: 1000:1.5"
     )
     bot.register_next_step_handler(msg, process_add_rate)
 
@@ -1468,19 +1328,16 @@ def process_add_rate(message):
     try:
         parts = message.text.split(":")
         if len(parts) != 2:
-            raise ValueError("Неверный формат. Используйте ПОРОГ:ЦЕНА")
+            raise ValueError("Неверный формат")
         threshold = int(parts[0].strip())
         rate = float(parts[1].strip())
         if threshold <= 0 or rate <= 0:
-            raise ValueError("Значения должны быть больше 0")
+            raise ValueError("Должно быть > 0")
         storage.set_rate(threshold, rate)
-        bot.send_message(user_id, f"✅ Курс добавлен: от {threshold} GMP = {rate} RUB")
-        admin_rates(message)
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ Ошибка: {e}\n\nФормат: 1000:1.5")
+        bot.send_message(user_id, f"✅ Добавлено: от {threshold} GMP = {rate} RUB")
         admin_rates(message)
     except Exception as e:
-        bot.send_message(user_id, f"❌ Ошибка: {e}")
+        bot.send_message(user_id, f"❌ Ошибка: {e}\nФормат: 1000:1.5")
         admin_rates(message)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_edit_rate")
@@ -1490,13 +1347,10 @@ def admin_edit_rate(call):
     user_id = call.from_user.id
     rates = storage.get_rates()
     bot.answer_callback_query(call.id)
-    text = "✏️ Изменение курса\n\n"
-    text += "Формат: СТАРЫЙ_ПОРОГ:НОВЫЙ_ПОРОГ:НОВЫЙ_КУРС\n\n"
-    text += "Текущие курсы:\n"
+    text = "Формат: СТАРЫЙ_ПОРОГ:НОВЫЙ_ПОРОГ:НОВЫЙ_КУРС\n\nТекущие:\n"
     for threshold, rate in sorted(rates.items()):
         text += f"• от {threshold} GMP = {rate} RUB\n"
-    text += "\nПример: 1000:1500:1.3\n"
-    text += "(изменить курс для 1000 на 1500 с ценой 1.3)"
+    text += "\nПример: 1000:1500:1.3"
     msg = bot.send_message(user_id, text)
     bot.register_next_step_handler(msg, process_edit_rate)
 
@@ -1505,21 +1359,18 @@ def process_edit_rate(message):
     try:
         parts = message.text.split(":")
         if len(parts) != 3:
-            raise ValueError("Неверный формат. Используйте СТАРЫЙ:НОВЫЙ:КУРС")
+            raise ValueError("Неверный формат")
         old = int(parts[0].strip())
         new = int(parts[1].strip())
         rate = float(parts[2].strip())
         if old <= 0 or new <= 0 or rate <= 0:
-            raise ValueError("Значения должны быть больше 0")
+            raise ValueError("Должно быть > 0")
         storage.delete_rate(old)
         storage.set_rate(new, rate)
-        bot.send_message(user_id, f"✅ Курс изменен: от {old} → от {new} GMP = {rate} RUB")
-        admin_rates(message)
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ Ошибка: {e}\n\nФормат: 1000:1500:1.3")
+        bot.send_message(user_id, f"✅ Изменено: от {old} → от {new} GMP = {rate} RUB")
         admin_rates(message)
     except Exception as e:
-        bot.send_message(user_id, f"❌ Ошибка: {e}")
+        bot.send_message(user_id, f"❌ Ошибка: {e}\nФормат: 1000:1500:1.3")
         admin_rates(message)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_delete_rate")
@@ -1529,8 +1380,7 @@ def admin_delete_rate(call):
     user_id = call.from_user.id
     rates = storage.get_rates()
     bot.answer_callback_query(call.id)
-    text = "🗑 Удаление курса\n\n"
-    text += "Введите порог для удаления:\n\n"
+    text = "Введите порог для удаления:\n\n"
     for threshold, rate in sorted(rates.items()):
         text += f"• от {threshold} GMP = {rate} RUB\n"
     msg = bot.send_message(user_id, text)
@@ -1541,12 +1391,9 @@ def process_delete_rate(message):
     try:
         threshold = int(message.text.strip())
         if storage.delete_rate(threshold):
-            bot.send_message(user_id, f"✅ Курс для {threshold} GMP удален")
+            bot.send_message(user_id, f"✅ Удален курс для {threshold} GMP")
         else:
-            bot.send_message(user_id, f"❌ Курс для {threshold} GMP не найден")
-        admin_rates(message)
-    except ValueError:
-        bot.send_message(user_id, "❌ Введите число")
+            bot.send_message(user_id, f"❌ Курс для {threshold} не найден")
         admin_rates(message)
     except Exception as e:
         bot.send_message(user_id, f"❌ Ошибка: {e}")
@@ -1560,10 +1407,6 @@ def admin_back(call):
     bot.answer_callback_query(call.id)
     cmd_admin(call.message)
 
-# ============================================
-# СТАТИСТИКА
-# ============================================
-
 @bot.message_handler(func=lambda message: message.text == "📊 Статистика")
 @admin_required
 @log_error
@@ -1572,21 +1415,12 @@ def admin_stats_msg(message):
     users = storage.get_all_users()
     revenue = storage.get_total_revenue()
     rates = storage.get_rates()
-    
-    text = "📊 Статистика магазина:\n\n"
-    text += f"👥 Всего пользователей: {len(users)}\n"
-    text += f"💰 Общая выручка: {revenue:.2f} RUB\n"
-    text += f"💲 Активных курсов: {len(rates)}\n\n"
-    text += "Текущие курсы:\n"
+    text = "📊 Статистика:\n\n"
+    text += f"👥 Пользователей: {len(users)}\n"
+    text += f"💰 Выручка: {revenue:.2f} RUB\n"
+    text += f"💲 Курсов: {len(rates)}\n\n"
     for threshold, rate in sorted(rates.items()):
         text += f"• от {threshold} GMP = {rate} RUB\n"
-    
-    success, balance = userbot_manager.get_balance()
-    if success:
-        text += f"\n💎 Баланс GMP: {balance:.2f}"
-    else:
-        text += f"\n⚠️ Не удалось получить баланс"
-    
     bot.send_message(user_id, text, reply_markup=get_admin_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "👥 Пользователи")
@@ -1595,17 +1429,13 @@ def admin_stats_msg(message):
 def admin_users_msg(message):
     user_id = message.from_user.id
     users = storage.get_all_users()
-    
-    text = "👥 Список пользователей:\n\n"
+    text = "👥 Пользователи:\n\n"
     for i, uid in enumerate(users[:20], 1):
         cnt = storage.get_user_purchases_count(uid)
-        text += f"{i}. ID: `{uid}` (покупок: {cnt})\n"
-    
+        text += f"{i}. ID: {uid} (покупок: {cnt})\n"
     if len(users) > 20:
-        text += f"\n... и еще {len(users) - 20} пользователей"
-    
-    text += f"\n\nВсего: {len(users)} пользователей"
-    bot.send_message(user_id, text, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
+        text += f"\n... и еще {len(users) - 20}"
+    bot.send_message(user_id, text, reply_markup=get_admin_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "🔙 Назад")
 @admin_required
@@ -1622,7 +1452,7 @@ def admin_back_msg(message):
 def handle_all_messages(message):
     bot.send_message(
         message.from_user.id,
-        "❗ Используйте кнопки меню для навигации",
+        "Используй кнопки меню",
         reply_markup=get_main_keyboard()
     )
 
@@ -1631,31 +1461,35 @@ def handle_all_messages(message):
 # ============================================
 
 def start_bot():
-    """Запуск бота и userbot"""
     logger.info("=" * 50)
     logger.info("Запуск GMP Shop Bot")
     logger.info("=" * 50)
     
     # Проверяем наличие файла сессии
     session_file = SESSION_NAME + ".session"
-    if not os.path.exists(session_file):
-        logger.warning(f"Файл сессии {session_file} не найден!")
-        logger.warning("Userbot не сможет работать без файла сессии")
+    if os.path.exists(session_file):
+        logger.info(f"✅ Файл сессии {session_file} найден")
+        storage.get_userbot_data()["session_exists"] = True
+    else:
+        logger.warning(f"❌ Файл сессии {session_file} не найден")
+        storage.get_userbot_data()["session_exists"] = False
+    storage.save_data()
     
-    # Проверяем статус userbot из хранилища
-    status = storage.get_userbot_status()
-    if status.get("phone") and status.get("is_active"):
-        logger.info(f"Попытка автоматического запуска userbot для {status['phone']}...")
-        if userbot_manager.start(status["phone"]):
-            logger.info("✅ Userbot успешно запущен")
-            success, balance = userbot_manager.get_balance()
-            if success:
-                logger.info(f"💎 Баланс аккаунта: {balance:.2f} GMP")
-        else:
-            logger.warning("⚠️ Автоматический запуск userbot не удался")
+    # Пробуем запустить userbot
+    logger.info("Попытка запуска userbot...")
+    userbot_data = storage.get_userbot_data()
+    phone = userbot_data.get("phone", "79200089184")
     
-    # Запускаем бота
-    logger.info("Запуск Telegram бота...")
+    if userbot_manager.start(phone):
+        logger.info("✅ Userbot успешно запущен")
+        success, balance = userbot_manager.get_balance()
+        if success:
+            logger.info(f"💰 Баланс аккаунта: {balance:.2f} GMP")
+    else:
+        logger.warning("⚠️ Автоматический запуск userbot не удался. Возможно нужен код подтверждения.")
+        logger.info("Используйте админ-панель -> 'Управление Userbot' -> 'Ввести код'")
+    
+    logger.info("Запуск бота...")
     logger.info("Бот запущен! Нажмите Ctrl+C для остановки")
     logger.info("=" * 50)
     
@@ -1663,17 +1497,16 @@ def start_bot():
         try:
             bot.polling(none_stop=True, interval=1, timeout=60)
         except Exception as e:
-            logger.error(f"Ошибка бота: {e}")
+            logger.error(f"Ошибка: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
     try:
         start_bot()
     except KeyboardInterrupt:
-        logger.info("Остановка бота (Ctrl+C)")
+        logger.info("Остановлен")
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
     finally:
-        logger.info("Остановка userbot...")
         userbot_manager.stop()
-        logger.info("Бот остановлен")
+        logger.info("Завершено")
