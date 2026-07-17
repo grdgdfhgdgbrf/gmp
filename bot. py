@@ -24,10 +24,7 @@ BOT_TOKEN = "8582908092:AAFJsjGQUvozKAqvklC3470q4ZQNuUHR9M8"
 
 ADMIN_IDS = [5356400377]
 
-REQUIRED_CHANNELS = [
-    {"name": "🆕 Канал", "url": "https://t.me/claim_news", "id": "@claim_news"},
-    {"name": "💬 Чат", "url": "https://t.me/chat_claim", "id": "@chat_claim"}
-]
+
 
 MARKET_NAME = "🍕 GMP Shop"
 
@@ -612,37 +609,6 @@ def check_payment_status(payment_id: str) -> Dict[str, Any]:
 # ПРОВЕРКА ПОДПИСКИ
 # ============================================
 
-def check_subscriptions(user_id: int, force_check: bool = False) -> bool:
-    cache_key = f"subscription_{user_id}"
-    if not force_check:
-        cached = storage._get_cached(cache_key, ttl=CACHE_TTL)
-        if cached is not None:
-            return cached
-    for channel in REQUIRED_CHANNELS:
-        try:
-            member = bot.get_chat_member(channel["id"], user_id)
-            if member.status in ["left", "kicked"]:
-                storage._set_cache(cache_key, False)
-                return False
-        except Exception as e:
-            logger.error(f"Ошибка проверки: {e}")
-            storage._set_cache(cache_key, False)
-            return False
-    storage._set_cache(cache_key, True)
-    return True
-
-def get_subscription_keyboard() -> types.InlineKeyboardMarkup:
-    keyboard = types.InlineKeyboardMarkup(row_width=1)
-    for channel in REQUIRED_CHANNELS:
-        keyboard.add(types.InlineKeyboardButton(
-            text=channel["name"],
-            url=channel["url"]
-        ))
-    keyboard.add(types.InlineKeyboardButton(
-        text="✅ Проверить подписку",
-        callback_data="check_subscription"
-    ))
-    return keyboard
 
 # ============================================
 # ВАЛИДАЦИЯ
