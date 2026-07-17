@@ -45,7 +45,7 @@ CACHE_TTL = 300
 
 API_ID = 26694251
 API_HASH = '5b041e7b70b74c095435be2b74c02abf'
-SESSION_NAME = "hjklgf1"
+SESSION_NAME = "gmpsetka"
 GMP_BOT_USERNAME = "gminesbot"
 
 # Каналы для подписки
