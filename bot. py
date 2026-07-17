@@ -10,7 +10,7 @@ import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict, Any
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from functools import wraps
 from dataclasses import dataclass, asdict
@@ -48,7 +48,7 @@ CACHE_TTL = 300
 
 API_ID = 26694251
 API_HASH = '5b041e7b70b74c095435be2b74c02abf'
-SESSION_NAME = "hjklgf1"  # Имя сессии для userbot
+SESSION_NAME = "userbot_session"
 GMP_BOT_USERNAME = "gminesbot"
 
 # ============================================
@@ -119,10 +119,9 @@ class Storage:
         if "rates" not in self.data:
             self.data["rates"] = RATES.copy()
             self.save_data()
-        if "userbot" not in self.data:
-            self.data["userbot"] = {
-                "phone": "79200089184",
-                "username": "hjklgf1",
+        if "userbot_status" not in self.data:
+            self.data["userbot_status"] = {
+                "phone": "",
                 "is_active": False,
                 "last_check": None,
                 "session_exists": False
@@ -145,7 +144,7 @@ class Storage:
                         return json.load(f)
                 except:
                     pass
-        return {"rates": RATES.copy(), "userbot": {"phone": "79200089184", "username": "hjklgf1", "is_active": False, "last_check": None, "session_exists": False}}
+        return {"rates": RATES.copy(), "userbot_status": {"phone": "", "is_active": False, "last_check": None, "session_exists": False}}
     
     def save_data(self):
         with self.lock:
@@ -291,7 +290,7 @@ class Storage:
     def get_all_users(self) -> list:
         users = []
         for key, value in self.data.items():
-            if key not in ["rates", "userbot"] and isinstance(value, dict):
+            if key not in ["rates", "userbot_status"] and isinstance(value, dict):
                 try:
                     users.append(int(key))
                 except:
@@ -305,33 +304,36 @@ class Storage:
     def get_total_revenue(self) -> float:
         total = 0
         for key, value in self.data.items():
-            if key not in ["rates", "userbot"] and isinstance(value, dict):
+            if key not in ["rates", "userbot_status"] and isinstance(value, dict):
                 for purchase in value.get("purchases", []):
                     if purchase.get("status") == "completed":
                         total += purchase.get("amount_rub", 0)
         return total
     
-    def get_userbot_data(self) -> Dict:
-        return self.data.get("userbot", {"phone": "79200089184", "username": "hjklgf1", "is_active": False, "last_check": None, "session_exists": False})
-    
-    def set_userbot_active(self, is_active: bool):
-        self.data["userbot"]["is_active"] = is_active
-        self.data["userbot"]["last_check"] = datetime.now().isoformat()
-        session_file = SESSION_NAME + ".session"
-        self.data["userbot"]["session_exists"] = os.path.exists(session_file)
+    def set_userbot_status(self, phone: str, is_active: bool, session_exists: bool = False):
+        self.data["userbot_status"] = {
+            "phone": phone,
+            "is_active": is_active,
+            "last_check": datetime.now().isoformat(),
+            "session_exists": session_exists
+        }
         self.save_data()
     
-    def set_userbot_phone(self, phone: str):
-        self.data["userbot"]["phone"] = phone
-        self.save_data()
+    def get_userbot_status(self) -> Dict:
+        return self.data.get("userbot_status", {"phone": "", "is_active": False, "last_check": None, "session_exists": False})
 
 storage = Storage()
 
 # ============================================
-# USERBOT
+# USERBOT (ПОЛНОСТЬЮ ПЕРЕДЕЛАН ПО АНАЛОГИИ С ФАЙЛОМ)
 # ============================================
 
 class UserbotManager:
+    """
+    Менеджер Userbot для взаимодействия с Telegram API через Telethon.
+    Полностью переделан по аналогии с примером из файла.
+    """
+    
     def __init__(self):
         self.client = None
         self.running = False
@@ -343,30 +345,46 @@ class UserbotManager:
         self.max_reconnect_attempts = 5
         self.start_event = threading.Event()
         self.auth_data = {
-            "phone": "79200089184",
-            "code": "",
+            "phone": "",
             "password": "",
+            "code": "",
             "awaiting_code": False,
             "awaiting_password": False
         }
+        self.moderation_group_id = None  # ID группы для модерации (если нужно)
+        self.admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
     
-    def start(self, phone: Optional[str] = None) -> bool:
+    def start(self, phone: str = None, password: str = None, code: str = None) -> bool:
+        """
+        Запускает userbot с опциональными данными для входа.
+        Поддерживает вход с кодом и паролем 2FA.
+        """
         with self.lock:
             if self.running:
                 return True
             try:
                 logger.info("Запуск Userbot...")
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
                 
                 # Используем сохраненный телефон или переданный
                 if phone:
                     self.auth_data["phone"] = phone
                 else:
-                    userbot_data = storage.get_userbot_data()
-                    if userbot_data.get("phone"):
-                        self.auth_data["phone"] = userbot_data["phone"]
+                    status = storage.get_userbot_status()
+                    if status.get("phone"):
+                        self.auth_data["phone"] = status["phone"]
                 
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
+                if password:
+                    self.auth_data["password"] = password
+                if code:
+                    self.auth_data["code"] = code
+                
+                # Проверяем существование сессии
+                session_file = SESSION_NAME + ".session"
+                session_exists = os.path.exists(session_file)
+                storage.set_userbot_status(self.auth_data["phone"], False, session_exists)
+                
                 self.client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
                 
                 def run_userbot():
@@ -377,7 +395,6 @@ class UserbotManager:
                         logger.error(f"Ошибка userbot: {e}")
                         self.running = False
                         self.is_ready = False
-                        storage.set_userbot_active(False)
                         self.start_event.set()
                 
                 self.thread = threading.Thread(target=run_userbot, daemon=True)
@@ -388,33 +405,69 @@ class UserbotManager:
                     time.sleep(1)
                     if self.is_ready:
                         logger.info("Userbot готов")
-                        storage.set_userbot_active(True)
                         self.start_event.set()
+                        storage.set_userbot_status(self.auth_data["phone"], True, True)
                         return True
                 
                 logger.warning("Userbot не готов (таймаут)")
-                storage.set_userbot_active(False)
                 self.start_event.set()
                 return False
             except Exception as e:
                 logger.error(f"Ошибка инициализации: {e}")
                 self.running = False
                 self.is_ready = False
-                storage.set_userbot_active(False)
                 self.start_event.set()
                 return False
     
     async def _start_async(self):
+        """Асинхронная инициализация и основной цикл userbot"""
         try:
-            # Пробуем войти с сохраненной сессией
-            await self.client.start()
+            # Проверяем наличие сессии
+            session_file = SESSION_NAME + ".session"
+            session_exists = os.path.exists(session_file)
+            
+            if session_exists:
+                # Пробуем войти с сохраненной сессией
+                logger.info("Попытка входа с сохраненной сессией...")
+                await self.client.start()
+            else:
+                # Новый вход
+                logger.info("Новый вход в аккаунт...")
+                phone = self.auth_data.get("phone")
+                if not phone:
+                    logger.error("Телефон не указан")
+                    self.running = False
+                    self.is_ready = False
+                    return
+                
+                # Запрашиваем код
+                await self.client.send_code_request(phone)
+                logger.info(f"Код подтверждения отправлен на {phone}")
+                
+                # Ожидаем ввод кода
+                if self.auth_data.get("code"):
+                    code = self.auth_data["code"]
+                    logger.info(f"Используем сохраненный код: {code}")
+                    await self.client.sign_in(phone, code)
+                else:
+                    # Если код не передан, ждем его через событие
+                    logger.info("Ожидание ввода кода через админ-панель...")
+                    # Здесь нужно дождаться ввода кода
+                    # В реальности код будет введен через админ-панель
+                    raise Exception("Требуется ввод кода подтверждения")
+            
+            # Проверяем вход
             me = await self.client.get_me()
             logger.info(f"Userbot запущен: @{me.username} (ID: {me.id})")
-            logger.info(f"Телефон: {self.auth_data['phone']}")
+            logger.info(f"Телефон: {me.phone}")
+            
             self.running = True
             self.is_ready = True
             self.reconnect_attempts = 0
-            storage.set_userbot_active(True)
+            storage.set_userbot_status(self.auth_data["phone"], True, True)
+            
+            # Запускаем обработчики событий
+            self._setup_event_handlers()
             
             # Основной цикл поддержания соединения
             while self.running:
@@ -427,19 +480,88 @@ class UserbotManager:
                 except Exception as e:
                     logger.error(f"Ошибка: {e}")
                     await asyncio.sleep(5)
+        except PhoneCodeInvalidError:
+            logger.error("Неверный код подтверждения")
+            self.running = False
+            self.is_ready = False
+            storage.set_userbot_status(self.auth_data["phone"], False, False)
+        except PhoneCodeExpiredError:
+            logger.error("Код подтверждения истек")
+            self.running = False
+            self.is_ready = False
+            storage.set_userbot_status(self.auth_data["phone"], False, False)
+        except SessionPasswordNeededError:
+            logger.info("Требуется пароль двухфакторной аутентификации")
+            if self.auth_data.get("password"):
+                try:
+                    await self.client.sign_in(password=self.auth_data["password"])
+                    logger.info("Вход с паролем выполнен успешно")
+                    self.running = True
+                    self.is_ready = True
+                    storage.set_userbot_status(self.auth_data["phone"], True, True)
+                    # Перезапускаем цикл
+                    await self._start_async()
+                    return
+                except Exception as e:
+                    logger.error(f"Ошибка входа с паролем: {e}")
+                    self.running = False
+                    self.is_ready = False
+                    storage.set_userbot_status(self.auth_data["phone"], False, False)
+            else:
+                logger.error("Требуется пароль 2FA, но он не указан")
+                self.running = False
+                self.is_ready = False
+                storage.set_userbot_status(self.auth_data["phone"], False, False)
         except Exception as e:
             logger.error(f"Критическая ошибка: {e}")
             self.running = False
             self.is_ready = False
-            storage.set_userbot_active(False)
+            storage.set_userbot_status(self.auth_data["phone"], False, False)
+    
+    def _setup_event_handlers(self):
+        """Настройка обработчиков событий userbot"""
+        if not self.client:
+            return
+        
+        # Создаем обработчик для получения кода подтверждения
+        @self.client.on(events.NewMessage)
+        async def event_handler(event):
+            try:
+                # Проверяем сообщения от ботов
+                if event.message and event.message.text:
+                    text = event.message.text.lower()
+                    
+                    # Проверяем сообщение от @gminesbot
+                    if event.message.sender_id and hasattr(event.message, 'chat'):
+                        try:
+                            sender = await event.message.get_sender()
+                            if sender and hasattr(sender, 'username') and sender.username == GMP_BOT_USERNAME:
+                                logger.info(f"Сообщение от @{GMP_BOT_USERNAME}: {text[:200]}")
+                        except:
+                            pass
+                    
+                    # Обработка кода подтверждения (если приходит в личку)
+                    if "код" in text and len(text) > 5:
+                        # Попытка извлечь код из сообщения
+                        import re
+                        code_match = re.search(r'\b(\d{5})\b', text)
+                        if code_match:
+                            code = code_match.group(1)
+                            logger.info(f"Получен код подтверждения: {code}")
+                            self.auth_data["code"] = code
+            except Exception as e:
+                logger.error(f"Ошибка в event_handler: {e}")
+        
+        logger.info("Обработчики событий настроены")
     
     async def _reconnect(self):
+        """Переподключение при потере соединения"""
         self.reconnect_attempts += 1
         if self.reconnect_attempts > self.max_reconnect_attempts:
             logger.error("Превышено количество попыток переподключения")
             self.running = False
             self.is_ready = False
-            storage.set_userbot_active(False)
+            storage.set_userbot_status(self.auth_data.get("phone", ""), False, False)
             return
         
         try:
@@ -450,15 +572,16 @@ class UserbotManager:
             logger.info("Переподключено успешно")
             self.is_ready = True
             self.reconnect_attempts = 0
-            storage.set_userbot_active(True)
+            storage.set_userbot_status(self.auth_data.get("phone", ""), True, True)
         except Exception as e:
             logger.error(f"Ошибка переподключения: {e}")
     
     def stop(self):
+        """Останавливает userbot"""
         with self.lock:
             self.running = False
             self.is_ready = False
-            storage.set_userbot_active(False)
+            storage.set_userbot_status(self.auth_data.get("phone", ""), False, False)
             if self.client:
                 try:
                     future = asyncio.run_coroutine_threadsafe(
@@ -477,9 +600,14 @@ class UserbotManager:
     
     def process_withdrawal(self, user_id: int, amount: float, 
                           username: Optional[str]) -> Tuple[bool, str]:
+        """Обрабатывает вывод GMP через @gminesbot"""
         if not self.is_ready or not self.client:
+            status = storage.get_userbot_status()
+            if not status.get("is_active"):
+                return False, "Userbot не активен. Обратитесь к администратору."
             if not self.start():
                 return False, "Userbot не готов. Попробуйте позже."
+        
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self._send_withdrawal_command(user_id, amount, username),
@@ -495,6 +623,7 @@ class UserbotManager:
     
     async def _send_withdrawal_command(self, user_id: int, amount: float, 
                                        username: Optional[str]) -> Tuple[bool, str]:
+        """Отправляет команду перевода в @gminesbot"""
         if not self.is_ready or not self.client:
             return False, "Userbot не готов"
         
@@ -526,7 +655,7 @@ class UserbotManager:
                             for row in msg.buttons:
                                 for button in row:
                                     button_text = button.text
-                                    confirm_buttons = ["Да ✅", "✅ Да", "Да", "Подтвердить", "Confirm"]
+                                    confirm_buttons = ["Да ✅", "✅ Да", "Да", "Подтвердить", "Confirm", "Ок"]
                                     if button_text in confirm_buttons:
                                         try:
                                             await msg.click(button_text)
@@ -554,13 +683,14 @@ class UserbotManager:
                                             except:
                                                 pass
                         
-                        if any(word in text for word in ["перевел", "переведено", "успешно", "выполнено", "зачислено"]):
+                        text_lower = text
+                        if any(word in text_lower for word in ["перевел", "переведено", "успешно", "выполнено", "зачислено"]):
                             return True, "Перевод успешно выполнен"
                         
-                        if any(word in text for word in ["недостаточно", "ошибка", "отказано", "нет средств", "неверно"]):
+                        if any(word in text_lower for word in ["недостаточно", "ошибка", "отказано", "нет средств", "неверно"]):
                             return False, f"Ошибка: {msg.text}"
                         
-                        if any(word in text for word in ["заявка", "принята", "обрабатывается", "отправлена"]):
+                        if any(word in text_lower for word in ["заявка", "принята", "обрабатывается", "отправлена"]):
                             return True, "Заявка на перевод принята"
                     
                     await asyncio.sleep(2)
@@ -578,6 +708,7 @@ class UserbotManager:
             return False, f"Ошибка: {str(e)}"
     
     def get_balance(self) -> Tuple[bool, float]:
+        """Получает баланс аккаунта в @gminesbot"""
         if not self.is_ready or not self.client:
             return False, 0
         
@@ -593,6 +724,7 @@ class UserbotManager:
             return False, 0
     
     async def _get_balance_async(self) -> Tuple[bool, float]:
+        """Асинхронное получение баланса"""
         try:
             await self.client.send_message(GMP_BOT_USERNAME, "баланс")
             await asyncio.sleep(2)
@@ -614,6 +746,51 @@ class UserbotManager:
         except Exception as e:
             logger.error(f"Ошибка получения баланса: {e}")
             return False, 0
+    
+    def check_status(self) -> Dict[str, Any]:
+        """Проверяет статус userbot"""
+        status = storage.get_userbot_status()
+        session_file = SESSION_NAME + ".session"
+        session_exists = os.path.exists(session_file)
+        
+        return {
+            "is_active": status.get("is_active", False),
+            "phone": status.get("phone", ""),
+            "last_check": status.get("last_check"),
+            "is_ready": self.is_ready,
+            "running": self.running,
+            "session_exists": session_exists,
+            "session_file": session_file
+        }
+    
+    def request_code(self, phone: str) -> Tuple[bool, str]:
+        """Запрашивает код подтверждения для телефона"""
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._request_code_async(phone),
+                self.loop
+            )
+            success, message = future.result(timeout=30)
+            return success, message
+        except Exception as e:
+            logger.error(f"Ошибка запроса кода: {e}")
+            return False, str(e)
+    
+    async def _request_code_async(self, phone: str) -> Tuple[bool, str]:
+        """Асинхронный запрос кода подтверждения"""
+        try:
+            if not self.client:
+                self.client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+                await self.client.connect()
+            
+            await self.client.send_code_request(phone)
+            self.auth_data["phone"] = phone
+            self.auth_data["awaiting_code"] = True
+            logger.info(f"Код подтверждения отправлен на {phone}")
+            return True, "Код подтверждения отправлен"
+        except Exception as e:
+            logger.error(f"Ошибка запроса кода: {e}")
+            return False, str(e)
 
 userbot_manager = UserbotManager()
 
@@ -907,6 +1084,217 @@ def show_main_menu(message):
     bot.send_message(user_id, text, reply_markup=get_main_keyboard())
 
 # ============================================
+# УПРАВЛЕНИЕ USERBOT (АДМИН-ПАНЕЛЬ)
+# ============================================
+
+@bot.message_handler(func=lambda message: message.text == "🤖 Управление Userbot")
+@admin_required
+@log_error
+def admin_userbot(message):
+    user_id = message.from_user.id
+    status = userbot_manager.check_status()
+    
+    text = "🤖 Управление Userbot\n\n"
+    text += f"📱 Телефон: {status['phone'] if status['phone'] else 'Не указан'}\n"
+    text += f"🟢 Статус: {'Активен' if status['is_active'] else 'Неактивен'}\n"
+    text += f"🔗 Подключен: {'Да' if status['is_ready'] else 'Нет'}\n"
+    text += f"🔄 Запущен: {'Да' if status['running'] else 'Нет'}\n"
+    text += f"💾 Сессия: {'Есть' if status['session_exists'] else 'Нет'}\n"
+    text += f"📁 Файл сессии: {status['session_file']}\n"
+    if status.get('last_check'):
+        text += f"📅 Последняя проверка: {status['last_check'][:16]}\n"
+    
+    if status['is_active'] and status['is_ready']:
+        success, balance = userbot_manager.get_balance()
+        if success:
+            text += f"\n💰 Баланс: {balance:.2f} GMP"
+    
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        types.InlineKeyboardButton("📱 Ввести телефон", callback_data="userbot_phone"),
+        types.InlineKeyboardButton("🔑 Запросить код", callback_data="userbot_request_code"),
+        types.InlineKeyboardButton("🔐 Ввести код", callback_data="userbot_code"),
+        types.InlineKeyboardButton("🔐 Ввести пароль (2FA)", callback_data="userbot_password"),
+        types.InlineKeyboardButton("▶️ Запустить", callback_data="userbot_start"),
+        types.InlineKeyboardButton("⏹ Остановить", callback_data="userbot_stop"),
+        types.InlineKeyboardButton("🔄 Проверить статус", callback_data="userbot_status"),
+        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+    )
+    bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_phone")
+@admin_required
+@log_error
+def userbot_phone(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(
+        user_id,
+        "📱 Введите номер телефона в формате:\n"
+        "➕ Код страны + номер\n"
+        "Пример: +79200089184\n\n"
+        "Для @hjklgf1 используйте: +79200089184"
+    )
+    bot.register_next_step_handler(msg, process_userbot_phone)
+
+def process_userbot_phone(message):
+    user_id = message.from_user.id
+    phone = message.text.strip()
+    
+    # Простая валидация
+    if not phone.startswith('+') or len(phone) < 10:
+        bot.send_message(user_id, "❌ Неверный формат. Используйте +79200089184")
+        admin_userbot(message)
+        return
+    
+    userbot_manager.auth_data["phone"] = phone
+    storage.set_userbot_status(phone, False, False)
+    bot.send_message(user_id, f"✅ Телефон сохранен: {phone}\nТеперь запросите код подтверждения.")
+    admin_userbot(message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_request_code")
+@admin_required
+@log_error
+def userbot_request_code(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id, "🔄 Запрос кода...")
+    
+    status = storage.get_userbot_status()
+    phone = status.get("phone", "")
+    
+    if not phone:
+        bot.send_message(user_id, "❌ Сначала введите номер телефона")
+        admin_userbot(call.message)
+        return
+    
+    success, message = userbot_manager.request_code(phone)
+    if success:
+        bot.send_message(user_id, f"✅ {message}\nКод придет в Telegram на аккаунт {phone}")
+    else:
+        bot.send_message(user_id, f"❌ Ошибка: {message}")
+    
+    admin_userbot(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_code")
+@admin_required
+@log_error
+def userbot_code(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    
+    status = storage.get_userbot_status()
+    phone = status.get("phone", "")
+    
+    if not phone:
+        bot.send_message(user_id, "❌ Сначала введите номер телефона")
+        admin_userbot(call.message)
+        return
+    
+    msg = bot.send_message(
+        user_id,
+        f"🔑 Введите код подтверждения из Telegram для {phone}:\n"
+        "Код придет в Telegram на ваш аккаунт\n"
+        "Пример: 12345"
+    )
+    bot.register_next_step_handler(msg, process_userbot_code)
+
+def process_userbot_code(message):
+    user_id = message.from_user.id
+    code = message.text.strip()
+    
+    if not code.isdigit() or len(code) != 5:
+        bot.send_message(user_id, "❌ Код должен состоять из 5 цифр")
+        admin_userbot(message)
+        return
+    
+    userbot_manager.auth_data["code"] = code
+    
+    # Пытаемся запустить userbot с кодом
+    status = storage.get_userbot_status()
+    phone = status.get("phone", "")
+    
+    if not phone:
+        bot.send_message(user_id, "❌ Телефон не найден. Введите его сначала.")
+        admin_userbot(message)
+        return
+    
+    # Запускаем userbot с телефоном и кодом
+    if userbot_manager.start(phone):
+        bot.send_message(user_id, "✅ Userbot успешно запущен!")
+    else:
+        bot.send_message(user_id, "❌ Не удалось запустить userbot. Проверьте код и попробуйте снова.")
+    
+    admin_userbot(message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_password")
+@admin_required
+@log_error
+def userbot_password(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(
+        user_id,
+        "🔐 Введите пароль двухфакторной аутентификации (2FA):\n"
+        "Если 2FA не включена, оставьте поле пустым"
+    )
+    bot.register_next_step_handler(msg, process_userbot_password)
+
+def process_userbot_password(message):
+    user_id = message.from_user.id
+    password = message.text.strip()
+    
+    userbot_manager.auth_data["password"] = password if password else ""
+    bot.send_message(user_id, "✅ Пароль сохранен")
+    admin_userbot(message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_start")
+@admin_required
+@log_error
+def userbot_start(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id, "🔄 Запуск...")
+    
+    status = storage.get_userbot_status()
+    phone = status.get("phone", "")
+    
+    if not phone:
+        bot.send_message(user_id, "❌ Сначала введите номер телефона")
+        admin_userbot(call.message)
+        return
+    
+    # Если userbot уже запущен, перезапускаем
+    if userbot_manager.running:
+        userbot_manager.stop()
+        time.sleep(2)
+    
+    if userbot_manager.start(phone):
+        bot.send_message(user_id, "✅ Userbot успешно запущен!")
+    else:
+        bot.send_message(user_id, "❌ Не удалось запустить userbot. Проверьте настройки.")
+    
+    admin_userbot(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_stop")
+@admin_required
+@log_error
+def userbot_stop(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    
+    userbot_manager.stop()
+    storage.set_userbot_status(storage.get_userbot_status().get("phone", ""), False, False)
+    bot.send_message(user_id, "⏹ Userbot остановлен")
+    admin_userbot(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "userbot_status")
+@admin_required
+@log_error
+def userbot_status(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    admin_userbot(call.message)
+
+# ============================================
 # КУРСЫ
 # ============================================
 
@@ -1150,145 +1538,6 @@ def cmd_help(message):
     bot.send_message(user_id, text, reply_markup=get_main_keyboard())
 
 # ============================================
-# УПРАВЛЕНИЕ USERBOT (АДМИНКА)
-# ============================================
-
-@bot.message_handler(func=lambda message: message.text == "🤖 Управление Userbot")
-@admin_required
-@log_error
-def admin_userbot(message):
-    user_id = message.from_user.id
-    userbot_data = storage.get_userbot_data()
-    
-    status = "✅ Активен" if userbot_data.get("is_active") else "❌ Неактивен"
-    ready = "✅ Да" if userbot_manager.is_ready else "❌ Нет"
-    running = "✅ Да" if userbot_manager.running else "❌ Нет"
-    session_exists = "✅ Да" if userbot_data.get("session_exists") else "❌ Нет"
-    
-    text = "🤖 Управление Userbot\n\n"
-    text += f"📱 Телефон: {userbot_data.get('phone', 'Не указан')}\n"
-    text += f"👤 Username: @{userbot_data.get('username', 'Не указан')}\n"
-    text += f"🟢 Статус: {status}\n"
-    text += f"🔗 Подключен: {ready}\n"
-    text += f"🔄 Запущен: {running}\n"
-    text += f"💾 Файл сессии: {session_exists}\n"
-    if userbot_data.get('last_check'):
-        text += f"📅 Последняя проверка: {userbot_data['last_check'][:16]}\n"
-    
-    if userbot_manager.is_ready and userbot_manager.running:
-        success, balance = userbot_manager.get_balance()
-        if success:
-            text += f"\n💰 Баланс GMP: {balance:.2f}"
-    
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        types.InlineKeyboardButton("▶️ Запустить", callback_data="userbot_start"),
-        types.InlineKeyboardButton("⏹ Остановить", callback_data="userbot_stop"),
-        types.InlineKeyboardButton("🔄 Проверить статус", callback_data="userbot_status"),
-        types.InlineKeyboardButton("📱 Ввести код", callback_data="userbot_code"),
-        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
-    )
-    bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_start")
-@admin_required
-@log_error
-def userbot_start(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id, "🔄 Запуск...")
-    
-    userbot_data = storage.get_userbot_data()
-    phone = userbot_data.get("phone", "79200089184")
-    
-    # Если userbot уже запущен, перезапускаем
-    if userbot_manager.running:
-        userbot_manager.stop()
-        time.sleep(2)
-    
-    if userbot_manager.start(phone):
-        bot.send_message(user_id, "✅ Userbot успешно запущен!")
-    else:
-        bot.send_message(user_id, "❌ Не удалось запустить userbot. Возможно нужен код подтверждения.\nНажмите '📱 Ввести код'")
-    
-    admin_userbot(call.message)
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_stop")
-@admin_required
-@log_error
-def userbot_stop(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    
-    userbot_manager.stop()
-    storage.set_userbot_active(False)
-    bot.send_message(user_id, "⏹ Userbot остановлен")
-    admin_userbot(call.message)
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_status")
-@admin_required
-@log_error
-def userbot_status(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    
-    # Проверяем наличие файла сессии
-    session_file = SESSION_NAME + ".session"
-    session_exists = os.path.exists(session_file)
-    userbot_data = storage.get_userbot_data()
-    userbot_data["session_exists"] = session_exists
-    storage.save_data()
-    
-    if session_exists:
-        bot.send_message(user_id, "✅ Файл сессии найден. Попробуйте запустить userbot.")
-    else:
-        bot.send_message(user_id, "❌ Файл сессии не найден. Нужно ввести код подтверждения.")
-    
-    admin_userbot(call.message)
-
-@bot.callback_query_handler(func=lambda call: call.data == "userbot_code")
-@admin_required
-@log_error
-def userbot_code(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    
-    msg = bot.send_message(
-        user_id,
-        "📱 Введите код подтверждения из Telegram для аккаунта @hjklgf1 (79200089184):\n\n"
-        "Код придет в Telegram на ваш аккаунт\n"
-        "Пример: 12345"
-    )
-    bot.register_next_step_handler(msg, process_userbot_code)
-
-def process_userbot_code(message):
-    user_id = message.from_user.id
-    code = message.text.strip()
-    
-    if not code.isdigit() or len(code) != 5:
-        bot.send_message(user_id, "❌ Код должен состоять из 5 цифр. Попробуйте снова.")
-        admin_userbot(message)
-        return
-    
-    bot.send_message(user_id, f"✅ Код {code} получен. Попробуйте запустить userbot снова.")
-    
-    # Сохраняем код и пытаемся запустить
-    phone = storage.get_userbot_data().get("phone", "79200089184")
-    userbot_manager.auth_data["code"] = code
-    
-    # Останавливаем если запущен
-    if userbot_manager.running:
-        userbot_manager.stop()
-        time.sleep(2)
-    
-    # Запускаем с кодом
-    if userbot_manager.start(phone):
-        bot.send_message(user_id, "✅ Userbot успешно запущен с кодом подтверждения!")
-    else:
-        bot.send_message(user_id, "❌ Не удалось запустить userbot. Проверьте код и попробуйте снова.")
-    
-    admin_userbot(message)
-
-# ============================================
 # АДМИНКА - КУРСЫ
 # ============================================
 
@@ -1399,6 +1648,38 @@ def process_delete_rate(message):
         bot.send_message(user_id, f"❌ Ошибка: {e}")
         admin_rates(message)
 
+@bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
+@admin_required
+@log_error
+def admin_stats(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    users = storage.get_all_users()
+    revenue = storage.get_total_revenue()
+    rates = storage.get_rates()
+    text = "📊 Статистика:\n\n"
+    text += f"👥 Пользователей: {len(users)}\n"
+    text += f"💰 Выручка: {revenue:.2f} RUB\n"
+    text += f"💲 Курсов: {len(rates)}\n\n"
+    for threshold, rate in sorted(rates.items()):
+        text += f"• от {threshold} GMP = {rate} RUB\n"
+    bot.send_message(user_id, text, reply_markup=get_admin_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_users")
+@admin_required
+@log_error
+def admin_users(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    users = storage.get_all_users()
+    text = "👥 Пользователи:\n\n"
+    for i, uid in enumerate(users[:20], 1):
+        cnt = storage.get_user_purchases_count(uid)
+        text += f"{i}. ID: {uid} (покупок: {cnt})\n"
+    if len(users) > 20:
+        text += f"\n... и еще {len(users) - 20}"
+    bot.send_message(user_id, text, reply_markup=get_admin_keyboard())
+
 @bot.callback_query_handler(func=lambda call: call.data == "admin_back")
 @admin_required
 @log_error
@@ -1411,31 +1692,13 @@ def admin_back(call):
 @admin_required
 @log_error
 def admin_stats_msg(message):
-    user_id = message.from_user.id
-    users = storage.get_all_users()
-    revenue = storage.get_total_revenue()
-    rates = storage.get_rates()
-    text = "📊 Статистика:\n\n"
-    text += f"👥 Пользователей: {len(users)}\n"
-    text += f"💰 Выручка: {revenue:.2f} RUB\n"
-    text += f"💲 Курсов: {len(rates)}\n\n"
-    for threshold, rate in sorted(rates.items()):
-        text += f"• от {threshold} GMP = {rate} RUB\n"
-    bot.send_message(user_id, text, reply_markup=get_admin_keyboard())
+    admin_stats(message)
 
 @bot.message_handler(func=lambda message: message.text == "👥 Пользователи")
 @admin_required
 @log_error
 def admin_users_msg(message):
-    user_id = message.from_user.id
-    users = storage.get_all_users()
-    text = "👥 Пользователи:\n\n"
-    for i, uid in enumerate(users[:20], 1):
-        cnt = storage.get_user_purchases_count(uid)
-        text += f"{i}. ID: {uid} (покупок: {cnt})\n"
-    if len(users) > 20:
-        text += f"\n... и еще {len(users) - 20}"
-    bot.send_message(user_id, text, reply_markup=get_admin_keyboard())
+    admin_users(message)
 
 @bot.message_handler(func=lambda message: message.text == "🔙 Назад")
 @admin_required
@@ -1468,28 +1731,25 @@ def start_bot():
     # Проверяем наличие файла сессии
     session_file = SESSION_NAME + ".session"
     if os.path.exists(session_file):
-        logger.info(f"✅ Файл сессии {session_file} найден")
-        storage.get_userbot_data()["session_exists"] = True
+        logger.info(f"Файл сессии найден: {session_file}")
     else:
-        logger.warning(f"❌ Файл сессии {session_file} не найден")
-        storage.get_userbot_data()["session_exists"] = False
-    storage.save_data()
+        logger.warning(f"Файл сессии {session_file} не найден!")
+        logger.warning("Userbot не сможет работать без файла сессии")
     
-    # Пробуем запустить userbot
-    logger.info("Попытка запуска userbot...")
-    userbot_data = storage.get_userbot_data()
-    phone = userbot_data.get("phone", "79200089184")
+    # Проверяем статус userbot из хранилища
+    status = storage.get_userbot_status()
+    if status.get("phone") and status.get("is_active"):
+        logger.info(f"Попытка автоматического запуска userbot для {status['phone']}...")
+        if userbot_manager.start(status["phone"]):
+            logger.info("✅ Userbot успешно запущен")
+            success, balance = userbot_manager.get_balance()
+            if success:
+                logger.info(f"💎 Баланс аккаунта: {balance:.2f} GMP")
+        else:
+            logger.warning("⚠️ Автоматический запуск userbot не удался")
     
-    if userbot_manager.start(phone):
-        logger.info("✅ Userbot успешно запущен")
-        success, balance = userbot_manager.get_balance()
-        if success:
-            logger.info(f"💰 Баланс аккаунта: {balance:.2f} GMP")
-    else:
-        logger.warning("⚠️ Автоматический запуск userbot не удался. Возможно нужен код подтверждения.")
-        logger.info("Используйте админ-панель -> 'Управление Userbot' -> 'Ввести код'")
-    
-    logger.info("Запуск бота...")
+    # Запускаем бота
+    logger.info("Запуск Telegram бота...")
     logger.info("Бот запущен! Нажмите Ctrl+C для остановки")
     logger.info("=" * 50)
     
@@ -1497,7 +1757,7 @@ def start_bot():
         try:
             bot.polling(none_stop=True, interval=1, timeout=60)
         except Exception as e:
-            logger.error(f"Ошибка: {e}")
+            logger.error(f"Ошибка бота: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
